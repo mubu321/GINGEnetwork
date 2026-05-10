@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>GINGA</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+
+
+<script type="module">
+import { initializeApp }                         from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth,
+         createUserWithEmailAndPassword,
+         signInWithEmailAndPassword,
+         onAuthStateChanged, signOut }            from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getFirestore, collection, doc,
+         setDoc, updateDoc, deleteDoc, onSnapshot,
+         increment, serverTimestamp,
+         query, orderBy }                        from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { getStorage, ref as sref,
+         uploadBytesResumable, getDownloadURL,
+         deleteObject }                          from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA-AfoXK81MnOxSxglADrwXRrAWqBBP0Ag",
+  authDomain: "ginga-f17c1.firebaseapp.com",
+  projectId: "ginga-f17c1",
+  storageBucket: "ginga-f17c1.firebasestorage.app",
+  messagingSenderId: "676700405698",
+  appId: "1:676700405698:web:b868d38c01e343139b205b",
+  measurementId: "G-MG34DCBCQG"
+};
+
+const app     = initializeApp(firebaseConfig);
+const auth    = getAuth(app);
+const db      = getFirestore(app);
+const storage = getStorage(app);
+
+onAuthStateChanged(auth, user => {
+  window.__currentUid = user ? user.uid : null;
+  window.__loggedIn   = !!user;
+  updateAuthUI(user);
+  if (!window.__fbReady) loadVideos();
+});
+
+function updateAuthUI(user) {
+  const btn = document.getElementById('nav-mypage');
+  if (!btn) return;
+  if (user) {
+    btn.querySelector('span').textContent = 'マイページ';
+    btn.querySelector('i').className = 'ti ti-user-check';
+  } else {
+    btn.querySelector('span').textContent = 'ログイン';
+    btn.querySelector('i').className = 'ti ti-login';
+  }
+}
+
+async function loadVideos() {
+  window.__fbReady = true;
+  document.getElementById('fb-dot').classList.add('on');
+  const q = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
+  onSnapshot(q, s => {
+    window.__VIDS = s.docs.map(d => ({ id: d.id, ...d.data() }));
+    buildFeed(window.__VIDS);
+  }, () => buildFeed([]));
+}
+
+window.fbLike = async (id, add) => {
+  if (!window.__fbReady) return;
+  await updateDoc(doc(db, 'videos', id), { likes: increment(add ? 1 : -1) });
+};
+
+window.fbFollow = async (id, add) => {
+  if (!window.__fbReady || !window.__currentUid) return;
+  const ref = doc(db, 'users', window.__currentUid, 'following', id);
+  if (add) await setDoc(ref, { at: serverTimestamp() });
+  else     await deleteDoc(ref);
+};
+
+window.fbDelete = async (videoId, videoURL) => {
+  if (!window.__fbReady || !window.__currentUid) return;
+  await deleteDoc(doc(db, 'videos', videoId));
+  if (videoURL) {
+    try { await deleteObject(sref(storage, videoURL)); } catch(_) {}
+  }
+};
+
+window.fbSignUp = async (email, password) => {
+  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  return cred.user;
+};
+window.fbSignIn = async (email, password) => {
+  const cred = await signInWithEmailAndPassword(auth, email, password);
+  return cred.user;
+};
+window.fbSignOut = async () => { await signOut(auth); };
+
+window.fbUpload = (file, caption, onProg, onDone, onErr) => {
+  if (!window.__fbReady)       { onErr('Firebase 未設定'); return; }
+  if (!window.__currentUid)    { onErr('ログインが必要です'); return; }
+  const uid  = window.__currentUid;
+  const path = `videos/${uid}_${Date.now()}.${file.name.split('.').pop()}`;
+  const task = uploadBytesResumable(sref(storage, path), file);
+  task.on('state_changed',
+    s => onProg(Math.round(s.bytesTransferred / s.totalBytes * 100)),
+    e => onErr(e.message),
+    async () => {
+      const url  = await getDownloadURL(task.snapshot.ref);
+      const tags = (caption || '').match(/#[\w\u3000-\u9fff]+/g) || [];
+      await setDoc(doc(db, 'videos', `vid_${Date.now()}`), {
+        emoji:'🎬', user:`user_${uid.slice(0,6)}`, av:'ME',
+        col: Math.floor(Math.random()*5),
+        title: caption || '新しい動画', tags, likes:0, comments:0, shares:0,
+        music:'Original Sound', videoURL: url,
+        uid: uid, createdAt: serverTimestamp()
+      });
+      onDone(url);
+    }
+  );
+};
+</script>
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+:root {
+  --red:  #FF2D55;
+  --dark: #09090F;
+  --muted: rgba(255,255,255,0.45);
+}
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--dark);
+  overflow: hidden;
+  font-family: -apple-system, 'Helvetica Neue', 'Noto Sans JP', sans-serif;
+  color: #fff;
+  overscroll-behavior: none;
+}
+
+#app { width: 100vw; height: 100dvh; position: relative; overflow: hidden; }
+
+/* ── TOPBAR ── */
+#topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 14px) 20px 12px;
+  background: linear-gradient(to bottom, rgba(9,9,15,0.65) 0%, transparent 100%);
+  pointer-events: none;
+}
+.logo {
+  font-size: 24px; font-weight: 900; letter-spacing: 6px;
+  color: var(--red); font-family: 'Georgia', serif;
+  text-shadow: 0 0 24px rgba(255,45,85,0.5);
+}
+#fb-dot {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 18px); right: 16px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #444; transition: background .4s; z-index: 51;
+}
+#fb-dot.on { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+
+/* ── 音量コントロール ── */
+#vol-wrap {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  left: 14px; z-index: 51;
+  display: flex; align-items: center; gap: 8px;
+}
+#vol-btn {
+  background: rgba(0,0,0,0.45);
+  border: 0.5px solid rgba(255,255,255,0.18);
+  border-radius: 50%; width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: #fff; font-size: 18px;
+  backdrop-filter: blur(6px); transition: transform .12s; flex-shrink: 0;
+}
+#vol-btn:active { transform: scale(0.88); }
+#vol-slider-wrap {
+  background: rgba(0,0,0,0.45);
+  border: 0.5px solid rgba(255,255,255,0.18);
+  border-radius: 20px; backdrop-filter: blur(6px);
+  padding: 0 12px; height: 36px;
+  display: flex; align-items: center;
+  max-width: 0; opacity: 0; overflow: hidden;
+  transition: max-width .3s ease, opacity .3s ease;
+}
+#vol-slider-wrap.open { max-width: 130px; opacity: 1; }
+#vol-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 100px; height: 3px; border-radius: 2px;
+  background: rgba(255,255,255,0.25); outline: none; cursor: pointer;
+}
+#vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 4px rgba(0,0,0,0.5);
+}
+#vol-slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; border: none;
+}
+
+/* ── 削除ボタン ── */
+.delete-btn {
+  position: absolute; top: calc(env(safe-area-inset-top, 0px) + 14px); right: 14px;
+  z-index: 20;
+  background: rgba(0,0,0,0.5); border: 0.5px solid rgba(255,60,60,0.4);
+  border-radius: 50%; width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: rgba(255,80,80,0.9); font-size: 18px;
+  backdrop-filter: blur(6px); transition: transform .12s, background .15s;
+}
+.delete-btn:active { transform: scale(0.88); background: rgba(255,45,85,0.25); }
+
+/* ── 削除確認ダイアログ ── */
+#del-dialog {
+  position: fixed; inset: 0; z-index: 400;
+  background: rgba(0,0,0,0.72);
+  display: none; align-items: center; justify-content: center; padding: 24px;
+}
+#del-dialog.open { display: flex; }
+.del-box {
+  width: 100%; max-width: 300px;
+  background: #1a1a28; border-radius: 18px;
+  padding: 24px 20px 20px;
+  border: 0.5px solid rgba(255,255,255,0.08); text-align: center;
+}
+.del-icon { font-size: 36px; color: var(--red); margin-bottom: 10px; }
+.del-title { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+.del-sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+.del-actions { display: flex; gap: 10px; }
+.del-cancel {
+  flex: 1; background: rgba(255,255,255,0.07);
+  border: 0.5px solid rgba(255,255,255,0.12);
+  border-radius: 10px; color: #fff;
+  font-size: 14px; font-weight: 700; font-family: inherit;
+  padding: 12px; cursor: pointer;
+}
+.del-confirm {
+  flex: 1; background: var(--red); border: none;
+  border-radius: 10px; color: #fff;
+  font-size: 14px; font-weight: 700; font-family: inherit;
+  padding: 12px; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(255,45,85,0.35);
+}
+
+/* ── FEED ── */
+#feed { width: 100%; height: 100%; position: relative; overflow: hidden; }
+#track { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
+
+/* ── SLIDE ── */
+.slide { width: 100vw; height: 100dvh; position: relative; overflow: hidden; }
+.slide-color-0 { background: #0d0a1a; }
+.slide-color-1 { background: #0a1208; }
+.slide-color-2 { background: #0f0a0a; }
+.slide-color-3 { background: #0a0d14; }
+.slide-color-4 { background: #0a0f0a; }
+.slide-emoji {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: min(45vw, 180px); opacity: 0.14;
+  pointer-events: none; user-select: none;
+}
+.slide-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.slide-overlay {
+  position: absolute; inset: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.75) 30%, transparent 62%);
+  pointer-events: none;
+}
+
+/* ── プログレスバー ── */
+.prog-bar { position: absolute; top: 0; left: 0; right: 0; height: 2px; background: rgba(255,255,255,0.12); z-index: 5; }
+.prog-fill { height: 100%; background: var(--red); animation: prog 5s linear infinite; }
+@keyframes prog { from { width: 0% } to { width: 100% } }
+
+/* ── VIDEO INFO ── */
+.v-info {
+  position: absolute; bottom: 0; left: 0;
+  padding: 16px 72px calc(72px + env(safe-area-inset-bottom, 0px)) 16px;
+  z-index: 10; max-width: 78%;
+}
+.v-user { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.avatar {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: var(--red); border: 2px solid rgba(255,255,255,0.3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; flex-shrink: 0;
+}
+.v-username { font-size: 14px; font-weight: 700; }
+.follow-btn {
+  font-size: 11px; color: var(--red);
+  border: 1px solid var(--red); border-radius: 20px;
+  padding: 3px 10px; cursor: pointer;
+  background: rgba(255,45,85,0.1); font-family: inherit;
+  white-space: nowrap;
+}
+.follow-btn.following { color: var(--muted); border-color: rgba(255,255,255,0.25); background: none; }
+.v-title { font-size: 13px; font-weight: 500; line-height: 1.5; margin-bottom: 7px; color: rgba(255,255,255,0.92); }
+.v-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 7px; }
+.v-tag { font-size: 12px; color: rgba(255,255,255,0.5); }
+.v-music { display: flex; align-items: center; gap: 5px; font-size: 11px; color: rgba(255,255,255,0.4); }
+.v-music i { animation: spin 4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── SIDE ACTIONS ── */
+.side-actions {
+  position: absolute; right: 0; bottom: 0;
+  width: 64px;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  z-index: 10;
+  padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+}
+.act-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  cursor: pointer; background: none; border: none;
+  color: #fff; font-family: inherit;
+  padding: 6px 0;
+  transition: transform .12s;
+}
+.act-btn:active { transform: scale(0.88); }
+.act-btn i { font-size: 30px; }
+.act-btn span { font-size: 11px; color: rgba(255,255,255,0.6); }
+.act-btn.liked i { color: var(--red); }
+
+/* ── BOTTOM NAV ── */
+#bottom-nav {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 50;
+  display: flex;
+  background: linear-gradient(to top, rgba(9,9,15,0.88) 0%, transparent 100%);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.bn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  cursor: pointer; background: none; border: none;
+  color: rgba(255,255,255,0.45); font-size: 10px; font-family: inherit;
+  padding: 10px 0 14px;
+}
+.bn i { font-size: 24px; }
+.bn.on { color: #fff; }
+.bn-post {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  cursor: pointer; background: none; border: none;
+  font-size: 10px; font-family: inherit;
+  padding: 8px 0 14px; color: rgba(255,255,255,0.45);
+}
+.post-pill {
+  background: var(--red); width: 46px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 14px rgba(255,45,85,0.45);
+}
+.post-pill i { font-size: 20px; color: #fff; }
+
+/* ── UPLOAD SHEET ── */
+#upload-sheet {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.65);
+  display: none; align-items: flex-end;
+}
+#upload-sheet.open { display: flex; }
+.sheet-inner {
+  width: 100%; background: #1a1a28;
+  border-radius: 20px 20px 0 0;
+  padding: 18px 20px calc(28px + env(safe-area-inset-bottom, 0px));
+  border-top: 0.5px solid rgba(255,255,255,0.08);
+}
+.handle { width: 36px; height: 4px; background: rgba(255,255,255,0.18); border-radius: 2px; margin: 0 auto 18px; }
+.sheet-title { font-size: 18px; font-weight: 900; letter-spacing: 2px; color: var(--red); margin-bottom: 4px; font-family: 'Georgia', serif; }
+.sheet-sub { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+
+.drop-zone {
+  border: 1.5px dashed rgba(255,45,85,0.35); border-radius: 12px;
+  padding: 24px 16px; text-align: center; cursor: pointer;
+  position: relative; margin-bottom: 12px;
+  transition: border-color .2s, background .2s;
+}
+.drop-zone:active { border-color: var(--red); background: rgba(255,45,85,0.05); }
+.drop-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+.drop-zone i { font-size: 34px; color: var(--red); display: block; margin-bottom: 8px; }
+.drop-label { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.drop-hint { font-size: 11px; color: var(--muted); }
+
+.err-box {
+  display: none; align-items: center; gap: 8px;
+  background: rgba(255,45,85,0.1); border: 0.5px solid rgba(255,45,85,0.35);
+  border-radius: 8px; padding: 10px 12px;
+  font-size: 12px; color: var(--red); margin-bottom: 10px;
+}
+.err-box.show { display: flex; }
+
+.file-info {
+  display: none; align-items: center; gap: 10px;
+  background: rgba(255,255,255,0.04); border-radius: 8px;
+  padding: 10px 12px; font-size: 12px; margin-bottom: 12px;
+}
+.file-info.show { display: flex; }
+.file-info i { font-size: 18px; color: var(--red); }
+.fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs { color: var(--muted); font-size: 11px; }
+
+.caption-inp {
+  width: 100%; background: rgba(255,255,255,0.05);
+  border: 0.5px solid rgba(255,255,255,0.1);
+  border-radius: 10px; padding: 10px 12px;
+  color: #fff; font-size: 14px; font-family: inherit;
+  margin-bottom: 12px; resize: none; outline: none;
+}
+.caption-inp::placeholder { color: var(--muted); }
+.caption-inp:focus { border-color: rgba(255,45,85,0.45); }
+
+.up-prog { display: none; margin-bottom: 12px; }
+.up-prog.show { display: block; }
+.up-bar-bg { background: rgba(255,255,255,0.08); border-radius: 4px; height: 5px; overflow: hidden; }
+.up-bar-fill { height: 100%; background: var(--red); border-radius: 4px; width: 0%; transition: width .25s; }
+.up-pct { font-size: 11px; color: var(--muted); text-align: right; margin-top: 4px; }
+
+.submit-btn {
+  width: 100%; background: var(--red); border: none; border-radius: 10px;
+  color: #fff; font-size: 15px; font-weight: 700; font-family: inherit;
+  padding: 14px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  box-shadow: 0 4px 18px rgba(255,45,85,0.38);
+  transition: opacity .2s;
+}
+.submit-btn:disabled { opacity: 0.55; cursor: default; }
+
+/* ── LOGIN MODAL ── */
+#login-modal {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.72);
+  display: none; align-items: center; justify-content: center; padding: 24px;
+}
+#login-modal.open { display: flex; }
+.lm-box {
+  width: 100%; max-width: 360px;
+  background: #1a1a28; border-radius: 20px;
+  padding: 28px 24px 24px;
+  border: 0.5px solid rgba(255,255,255,0.08);
+}
+.lm-title { font-size: 20px; font-weight: 900; letter-spacing: 2px; color: var(--red); font-family: 'Georgia', serif; margin-bottom: 4px; text-align: center; }
+.lm-sub { font-size: 12px; color: var(--muted); text-align: center; margin-bottom: 20px; }
+.lm-tabs { display: flex; border-radius: 10px; background: rgba(255,255,255,0.05); margin-bottom: 18px; overflow: hidden; }
+.lm-tab { flex: 1; padding: 9px; text-align: center; font-size: 13px; font-weight: 700; cursor: pointer; border: none; background: none; color: var(--muted); font-family: inherit; transition: all .2s; }
+.lm-tab.on { background: var(--red); color: #fff; border-radius: 10px; }
+.lm-inp { width: 100%; background: rgba(255,255,255,0.06); border: 0.5px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 11px 14px; color: #fff; font-size: 14px; font-family: inherit; margin-bottom: 10px; outline: none; }
+.lm-inp:focus { border-color: rgba(255,45,85,0.5); }
+.lm-inp::placeholder { color: var(--muted); }
+.lm-err { display: none; font-size: 12px; color: var(--red); background: rgba(255,45,85,0.1); border: 0.5px solid rgba(255,45,85,0.3); border-radius: 8px; padding: 9px 12px; margin-bottom: 10px; }
+.lm-err.show { display: block; }
+.lm-btn { width: 100%; background: var(--red); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 700; font-family: inherit; padding: 13px; cursor: pointer; margin-bottom: 10px; box-shadow: 0 4px 18px rgba(255,45,85,0.38); display: flex; align-items: center; justify-content: center; gap: 8px; transition: opacity .2s; }
+.lm-btn:disabled { opacity: 0.55; cursor: default; }
+.lm-close { width: 100%; background: none; border: none; border-radius: 10px; color: var(--muted); font-size: 13px; font-family: inherit; padding: 8px; cursor: pointer; }
+.lm-logout { display: none; margin-top: 10px; width: 100%; background: none; border: 0.5px solid rgba(255,255,255,0.15); border-radius: 10px; color: var(--muted); font-size: 13px; font-family: inherit; padding: 10px; cursor: pointer; }
+.lm-logout.show { display: block; }
+
+/* ── TOAST ── */
+#toast {
+  position: fixed;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  left: 50%; transform: translateX(-50%) translateY(14px);
+  background: rgba(28,28,42,0.96); border: 0.5px solid rgba(255,255,255,0.1);
+  color: #fff; font-size: 12px; padding: 8px 18px;
+  border-radius: 20px; z-index: 999;
+  opacity: 0; transition: all .28s; pointer-events: none; white-space: nowrap;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="feed">
+    <div id="track"></div>
+
+    <!-- ロゴのみ -->
+    <div id="topbar"><div class="logo">GINGA</div></div>
+    <div id="fb-dot"></div>
+
+    <!-- 音量コントロール -->
+    <div id="vol-wrap">
+      <button id="vol-btn" onclick="toggleVolSlider()">
+        <i class="ti ti-volume-off" id="vol-icon"></i>
+      </button>
+      <div id="vol-slider-wrap">
+        <input id="vol-slider" type="range" min="0" max="100" value="80" oninput="onVolChange(this.value)">
+      </div>
+    </div>
+
+    <!-- ボトムナビ: ホーム・投稿・マイページ -->
+    <div id="bottom-nav">
+      <button class="bn on"><i class="ti ti-home"></i><span>ホーム</span></button>
+      <button class="bn-post" onclick="openUpload()">
+        <div class="post-pill"><i class="ti ti-plus"></i></div>
+        <span>投稿</span>
+      </button>
+      <button class="bn" id="nav-mypage" onclick="openLoginModal()"><i class="ti ti-login"></i><span>ログイン</span></button>
+    </div>
+  </div>
+
+  <!-- アップロードシート -->
+  <div id="upload-sheet">
+    <div class="sheet-inner">
+      <div class="handle"></div>
+      <div class="sheet-title">動画を投稿</div>
+      <div class="sheet-sub" id="sheet-sub">Firebase Storage へアップロード · 縦型推奨（9:16）</div>
+      <div class="drop-zone">
+        <input type="file" accept="video/*" id="fileInput" onchange="handleFile(event)">
+        <i class="ti ti-video-plus"></i>
+        <div class="drop-label">タップして動画を選択</div>
+        <div class="drop-hint">MP4 / MOV · 最大 500MB</div>
+      </div>
+      <div class="err-box" id="errBox"><i class="ti ti-alert-circle"></i><span id="errTxt"></span></div>
+      <div class="file-info" id="fileInfo"><i class="ti ti-file-check"></i><span class="fn" id="fname"></span><span class="fs" id="fsize"></span></div>
+      <textarea class="caption-inp" id="cap" rows="2" placeholder="キャプション（#タグOK）"></textarea>
+      <div class="up-prog" id="upProg">
+        <div class="up-bar-bg"><div class="up-bar-fill" id="upFill"></div></div>
+        <div class="up-pct" id="upPct">0%</div>
+      </div>
+      <button class="submit-btn" id="submitBtn" onclick="doUpload()">
+        <i class="ti ti-upload"></i>アップロード
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- 削除確認ダイアログ -->
+<div id="del-dialog">
+  <div class="del-box">
+    <div class="del-icon"><i class="ti ti-trash"></i></div>
+    <div class="del-title">動画を削除しますか？</div>
+    <div class="del-sub">削除すると元に戻せません</div>
+    <div class="del-actions">
+      <button class="del-cancel" onclick="closeDelDialog()">キャンセル</button>
+      <button class="del-confirm" id="del-confirm-btn" onclick="confirmDelete()">削除する</button>
+    </div>
+  </div>
+</div>
+
+<!-- ログインモーダル -->
+<div id="login-modal">
+  <div class="lm-box">
+    <div class="lm-title">GINGA</div>
+    <div class="lm-sub" id="lm-sub">投稿するにはログインが必要です</div>
+    <div class="lm-tabs" id="lm-tabs">
+      <button class="lm-tab on" id="tab-login" onclick="switchTab('login')">ログイン</button>
+      <button class="lm-tab" id="tab-signup" onclick="switchTab('signup')">新規登録</button>
+    </div>
+    <input class="lm-inp" type="email" id="lm-email" placeholder="メールアドレス" autocomplete="email">
+    <input class="lm-inp" type="password" id="lm-password" placeholder="パスワード（6文字以上）" autocomplete="current-password">
+    <div class="lm-err" id="lm-err"></div>
+    <button class="lm-btn" id="lm-submit" onclick="doAuth()">
+      <i class="ti ti-login"></i><span id="lm-submit-label">ログイン</span>
+    </button>
+    <button class="lm-logout" id="lm-logout" onclick="doLogout()">
+      <i class="ti ti-logout"></i> ログアウト
+    </button>
+    <button class="lm-close" onclick="closeLoginModal()">キャンセル</button>
+  </div>
+</div>
+
+<script>
+window.__VIDS    = [];
+window.__fbReady = false;
+
+let cur = 0;
+const liked     = new Set();
+const following = new Set();
+
+function fmt(n) {
+  n = Number(n) || 0;
+  if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+  if (n >= 1000)  return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+/* ── フィード構築 ── */
+function buildFeed(vids) {
+  const track = document.getElementById('track');
+  track.innerHTML = '';
+  if (!vids || vids.length === 0) {
+    track.innerHTML = `<div style="width:100vw;height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:rgba(255,255,255,0.3);"><i class="ti ti-video-off" style="font-size:54px;"></i><div style="font-size:15px;font-weight:600;">動画がまだありません</div><div style="font-size:12px;">＋ボタンから最初の動画を投稿しよう</div></div>`;
+    return;
+  }
+  vids.forEach((v, i) => {
+    const lk = liked.has(v.id || i);
+    const fw = following.has(v.id || i);
+    const isOwn = window.__currentUid && v.uid === window.__currentUid;
+    const s  = document.createElement('div');
+    s.className = `slide slide-color-${(v.col ?? i) % 5}`;
+    s.innerHTML = `
+      <div class="prog-bar"><div class="prog-fill" style="animation-delay:${i*0.3}s"></div></div>
+      ${v.videoURL
+        ? `<video class="slide-video" src="${v.videoURL}" loop muted playsinline></video>`
+        : `<div class="slide-emoji">${v.emoji || '🎬'}</div>`}
+      <div class="slide-overlay"></div>
+      ${isOwn ? `<button class="delete-btn" onclick="openDelDialog('${v.id}','${v.videoURL||''}')"><i class="ti ti-trash"></i></button>` : ''}
+      <div class="v-info">
+        <div class="v-user">
+          <div class="avatar">${v.av}</div>
+          <span class="v-username">@${v.user}</span>
+          <button class="follow-btn${fw?' following':''}" id="fw${i}" onclick="toggleFollow(${i})">${fw?'フォロー中':'+ フォロー'}</button>
+        </div>
+        <div class="v-title">${v.title}</div>
+        <div class="v-tags">${(v.tags||[]).map(t=>`<span class="v-tag">${t}</span>`).join('')}</div>
+        <div class="v-music"><i class="ti ti-disc"></i>${v.music}</div>
+      </div>
+      <div class="side-actions">
+        <button class="act-btn${lk?' liked':''}" id="lb${i}" onclick="toggleLike(${i})">
+          <i class="ti ti-heart"></i><span id="lc${i}">${fmt(lk ? v.likes+1 : v.likes)}</span>
+        </button>
+        <button class="act-btn">
+          <i class="ti ti-message-circle"></i><span>${fmt(v.comments)}</span>
+        </button>
+        <button class="act-btn">
+          <i class="ti ti-share"></i><span>${fmt(v.shares)}</span>
+        </button>
+      </div>`;
+    track.appendChild(s);
+  });
+  applyPos(false);
+  // 最初の動画を再生
+  setTimeout(() => playCurrentSlide(), 100);
+}
+
+function applyPos(anim) {
+  const track = document.getElementById('track');
+  track.style.transition = anim ? 'transform .42s cubic-bezier(.4,0,.2,1)' : 'none';
+  track.style.transform  = `translateY(${-cur * 100}dvh)`;
+}
+
+function go(dir) {
+  const next = cur + dir;
+  if (next < 0 || next >= window.__VIDS.length) return;
+  pauseSlide(cur);
+  cur = next;
+  applyPos(true);
+  setTimeout(() => playCurrentSlide(), 80);
+}
+
+/* ── 動画再生制御 ── */
+let _vol   = 0.8;
+let _muted = true;
+
+function getSlideVideo(idx) {
+  const slides = document.querySelectorAll('.slide');
+  return slides[idx] ? slides[idx].querySelector('.slide-video') : null;
+}
+
+function pauseSlide(idx) {
+  const v = getSlideVideo(idx);
+  if (v) { v.muted = true; v.pause(); }
+}
+
+function playCurrentSlide() {
+  const v = getSlideVideo(cur);
+  if (!v) return;
+  v.muted  = _muted;
+  v.volume = _vol;
+  v.play().catch(() => {});
+}
+
+/* ── 音量コントロール ── */
+function updateVolIcon() {
+  const icon = document.getElementById('vol-icon');
+  if (!icon) return;
+  if (_muted || _vol === 0) icon.className = 'ti ti-volume-off';
+  else if (_vol < 0.5)      icon.className = 'ti ti-volume-2';
+  else                      icon.className = 'ti ti-volume';
+}
+
+let _sliderOpen = false;
+function toggleVolSlider() {
+  // 初回タップでミュート解除
+  if (_muted) {
+    _muted = false;
+    playCurrentSlide();
+    updateVolIcon();
+  }
+  _sliderOpen = !_sliderOpen;
+  document.getElementById('vol-slider-wrap').classList.toggle('open', _sliderOpen);
+  clearTimeout(toggleVolSlider._t);
+  if (_sliderOpen) {
+    toggleVolSlider._t = setTimeout(() => {
+      _sliderOpen = false;
+      document.getElementById('vol-slider-wrap').classList.remove('open');
+    }, 3000);
+  }
+}
+
+function onVolChange(val) {
+  _vol   = val / 100;
+  _muted = _vol === 0;
+  const v = getSlideVideo(cur);
+  if (v) { v.volume = _vol; v.muted = _muted; }
+  updateVolIcon();
+  clearTimeout(toggleVolSlider._t);
+  toggleVolSlider._t = setTimeout(() => {
+    _sliderOpen = false;
+    document.getElementById('vol-slider-wrap').classList.remove('open');
+  }, 3000);
+}
+
+/* ── いいね ── */
+function toggleLike(i) {
+  const v  = window.__VIDS[i];
+  const id = v.id ?? String(i);
+  const btn = document.getElementById('lb' + i);
+  const cnt = document.getElementById('lc' + i);
+  if (liked.has(id)) {
+    liked.delete(id); btn.classList.remove('liked'); cnt.textContent = fmt(v.likes);
+    window.fbLike && window.fbLike(id, false);
+  } else {
+    liked.add(id); btn.classList.add('liked'); cnt.textContent = fmt(v.likes + 1);
+    window.fbLike && window.fbLike(id, true);
+  }
+}
+
+/* ── フォロー ── */
+function toggleFollow(i) {
+  const v  = window.__VIDS[i];
+  const id = v.id ?? String(i);
+  const btn = document.getElementById('fw' + i);
+  if (following.has(id)) {
+    following.delete(id); btn.textContent = '+ フォロー'; btn.classList.remove('following');
+    window.fbFollow && window.fbFollow(id, false);
+    showToast('フォロー解除しました');
+  } else {
+    following.add(id); btn.textContent = 'フォロー中'; btn.classList.add('following');
+    window.fbFollow && window.fbFollow(id, true);
+    showToast('フォローしました ✓');
+  }
+}
+
+/* ── スワイプ（スマホ） ── */
+let startY = 0, startT = 0;
+document.addEventListener('touchstart', e => {
+  if (document.getElementById('upload-sheet').classList.contains('open')) return;
+  startY = e.touches[0].clientY; startT = Date.now();
+}, { passive: true });
+
+document.addEventListener('touchmove', e => {
+  if (!document.getElementById('upload-sheet').classList.contains('open'))
+    e.preventDefault();
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+  if (document.getElementById('upload-sheet').classList.contains('open')) return;
+  const dy = startY - e.changedTouches[0].clientY;
+  const dt = Date.now() - startT;
+  if (Math.abs(dy) > 50 && dt < 350) go(dy > 0 ? 1 : -1);
+  else if (Math.abs(dy) > 90)        go(dy > 0 ? 1 : -1);
+}, { passive: true });
+
+/* ── ホイール（PC） ── */
+let wAcc = 0, wLock = false;
+document.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (wLock) return;
+  wAcc += e.deltaY;
+  if (Math.abs(wAcc) >= 200) {
+    go(wAcc > 0 ? 1 : -1);
+    wAcc = 0; wLock = true;
+    setTimeout(() => { wLock = false; }, 600);
+  }
+}, { passive: false });
+
+/* ── キーボード（PC） ── */
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'j') go(1);
+  if (e.key === 'ArrowUp'   || e.key === 'k') go(-1);
+});
+
+/* ── アップロード ── */
+function openUpload() {
+  if (!window.__loggedIn) { openLoginModal(true); return; }
+  _openUploadSheet();
+}
+
+function _openUploadSheet() {
+  document.getElementById('upload-sheet').classList.add('open');
+  ['errBox','fileInfo','upProg'].forEach(id => document.getElementById(id).classList.remove('show'));
+  document.getElementById('cap').value = '';
+  document.getElementById('fileInput').value = '';
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-upload"></i>アップロード'; btn.style.background = '';
+  const sub = document.getElementById('sheet-sub');
+  if (!window.__fbReady) {
+    sub.textContent = '⚠️ Firebase未設定 — デモモードで動作'; sub.style.color = '#facc15';
+  } else {
+    sub.textContent = 'Firebase Storage へアップロード · 縦型推奨（9:16）'; sub.style.color = '';
+  }
+}
+
+document.getElementById('upload-sheet').addEventListener('click', e => {
+  if (e.target === document.getElementById('upload-sheet'))
+    document.getElementById('upload-sheet').classList.remove('open');
+});
+
+function handleFile(e) {
+  const file = e.target.files[0]; if (!file) return;
+  document.getElementById('errBox').classList.remove('show');
+  document.getElementById('fileInfo').classList.remove('show');
+  if (file.size > 500 * 1024 * 1024) {
+    document.getElementById('errTxt').textContent = `500MBを超えています（${(file.size/1024/1024).toFixed(0)}MB）`;
+    document.getElementById('errBox').classList.add('show'); return;
+  }
+  document.getElementById('fname').textContent = file.name;
+  document.getElementById('fsize').textContent = (file.size/1024/1024).toFixed(2) + ' MB';
+  document.getElementById('fileInfo').classList.add('show');
+}
+
+function doUpload() {
+  const fi  = document.getElementById('fileInput');
+  const btn = document.getElementById('submitBtn');
+  if (!fi.files[0]) {
+    document.getElementById('errTxt').textContent = '動画を選択してください';
+    document.getElementById('errBox').classList.add('show'); return;
+  }
+  document.getElementById('errBox').classList.remove('show');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2" style="animation:spin 1s linear infinite"></i> アップロード中…';
+
+  const fill = document.getElementById('upFill');
+  const pct  = document.getElementById('upPct');
+  document.getElementById('upProg').classList.add('show');
+
+  const onProg = p => { fill.style.width = p + '%'; pct.textContent = p + '%'; };
+  const onDone = () => {
+    btn.innerHTML = '<i class="ti ti-check"></i> 投稿完了！';
+    btn.style.background = '#22c55e';
+    showToast('🎉 投稿しました！');
+    setTimeout(() => document.getElementById('upload-sheet').classList.remove('open'), 1400);
+  };
+  const onErr = msg => {
+    document.getElementById('upProg').classList.remove('show');
+    btn.disabled = false; btn.innerHTML = '<i class="ti ti-upload"></i>アップロード'; btn.style.background = '';
+    document.getElementById('errTxt').textContent = 'エラー: ' + msg;
+    document.getElementById('errBox').classList.add('show');
+  };
+
+  if (window.__fbReady && window.fbUpload) {
+    window.fbUpload(fi.files[0], document.getElementById('cap').value, onProg, onDone, onErr);
+  } else {
+    let p = 0;
+    const t = setInterval(() => {
+      p = Math.min(p + 8, 100); onProg(p);
+      if (p >= 100) { clearInterval(t); onDone(); showToast('デモ: Firebase設定後に実際に保存されます'); }
+    }, 160);
+  }
+}
+
+/* ── ログインモーダル ── */
+let _loginFromUpload = false;
+let _lmTab = 'login';
+
+function openLoginModal(fromUpload = false) {
+  _loginFromUpload = fromUpload;
+  const modal  = document.getElementById('login-modal');
+  const sub    = document.getElementById('lm-sub');
+  const tabs   = document.getElementById('lm-tabs');
+  const submit = document.getElementById('lm-submit');
+  const logout = document.getElementById('lm-logout');
+  document.getElementById('lm-err').classList.remove('show');
+  document.getElementById('lm-email').value    = '';
+  document.getElementById('lm-password').value = '';
+  if (window.__loggedIn) {
+    sub.textContent      = 'ログイン中です';
+    tabs.style.display   = 'none';
+    submit.style.display = 'none';
+    logout.classList.add('show');
+  } else {
+    sub.textContent      = fromUpload ? '投稿するにはログインが必要です' : 'GINGAにログイン';
+    tabs.style.display   = '';
+    submit.style.display = '';
+    logout.classList.remove('show');
+    switchTab('login');
+  }
+  modal.classList.add('open');
+}
+function closeLoginModal() { document.getElementById('login-modal').classList.remove('open'); }
+function switchTab(tab) {
+  _lmTab = tab;
+  document.getElementById('tab-login').classList.toggle('on', tab === 'login');
+  document.getElementById('tab-signup').classList.toggle('on', tab === 'signup');
+  document.getElementById('lm-submit-label').textContent = tab === 'login' ? 'ログイン' : '新規登録';
+  document.getElementById('lm-err').classList.remove('show');
+}
+async function doAuth() {
+  const email    = document.getElementById('lm-email').value.trim();
+  const password = document.getElementById('lm-password').value;
+  const errEl    = document.getElementById('lm-err');
+  const btn      = document.getElementById('lm-submit');
+  errEl.classList.remove('show');
+  if (!email || !password) { errEl.textContent = 'メールアドレスとパスワードを入力してください'; errEl.classList.add('show'); return; }
+  btn.disabled = true;
+  try {
+    if (_lmTab === 'login') { await window.fbSignIn(email, password); showToast('ログインしました ✓'); }
+    else                    { await window.fbSignUp(email, password); showToast('登録しました ✓'); }
+    closeLoginModal();
+    if (_loginFromUpload) setTimeout(_openUploadSheet, 200);
+  } catch(e) {
+    const msgs = {
+      'auth/user-not-found':      'メールアドレスが見つかりません',
+      'auth/wrong-password':      'パスワードが正しくありません',
+      'auth/email-already-in-use':'このメールアドレスは既に使用されています',
+      'auth/invalid-email':       '有効なメールアドレスを入力してください',
+      'auth/weak-password':       'パスワードは6文字以上にしてください',
+      'auth/invalid-credential':  'メールアドレスまたはパスワードが正しくありません',
+    };
+    errEl.textContent = msgs[e.code] || e.message;
+    errEl.classList.add('show');
+  } finally { btn.disabled = false; }
+}
+async function doLogout() { await window.fbSignOut(); closeLoginModal(); showToast('ログアウトしました'); }
+
+/* ── 削除 ── */
+let _delTarget = { id: null, url: null };
+function openDelDialog(id, url) {
+  _delTarget = { id, url };
+  document.getElementById('del-dialog').classList.add('open');
+}
+function closeDelDialog() {
+  document.getElementById('del-dialog').classList.remove('open');
+  _delTarget = { id: null, url: null };
+}
+async function confirmDelete() {
+  const btn = document.getElementById('del-confirm-btn');
+  btn.disabled = true; btn.textContent = '削除中…';
+  try {
+    await window.fbDelete(_delTarget.id, _delTarget.url);
+    closeDelDialog(); showToast('🗑️ 動画を削除しました');
+  } catch(e) {
+    closeDelDialog(); showToast('削除に失敗しました: ' + e.message);
+  } finally { btn.disabled = false; btn.textContent = '削除する'; }
+}
+
+/* ── Toast ── */
+let toastT;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+/* ── 初期描画 ── */
+buildFeed([]);
+</script>
+</body>
+</html>
